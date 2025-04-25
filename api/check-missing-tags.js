@@ -1,4 +1,4 @@
-shopify-tag-checker/
+inventory-tag-checker/
 ├── api/
 │   └── check-missing-tags.js
 ├── .env.example
