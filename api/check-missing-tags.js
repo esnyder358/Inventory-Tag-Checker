@@ -1,78 +1,86 @@
-export default async function handler(req, res) {
-  const storeDomain = process.env.SHOPIFY_STORE_DOMAIN;
-  const apiKey = process.env.SHOPIFY_ADMIN_API_KEY;
-  const password = process.env.SHOPIFY_ADMIN_API_PASSWORD;
-  const tagsToCheck = process.env.TAGS_TO_CHECK?.split(',').map(tag => tag.trim());
-  const emailTo = process.env.EMAIL_TO;
-  const emailFrom = process.env.EMAIL_FROM;
-  const postmarkApiKey = process.env.POSTMARK_API_KEY;
+const fetch = require('node-fetch');
+const postmark = require('postmark');
 
-  if (!storeDomain || !apiKey || !password || !tagsToCheck || !emailTo || !emailFrom || !postmarkApiKey) {
-    return res.status(500).json({ error: 'Missing required environment variables' });
-  }
+module.exports = async (req, res) => {
+  try {
+    const {
+      SHOPIFY_STORE_DOMAIN,
+      SHOPIFY_ADMIN_API_KEY,
+      SHOPIFY_ADMIN_API_PASSWORD,
+      TAGS_TO_CHECK,
+      POSTMARK_API_KEY,
+      EMAIL_TO,
+      EMAIL_FROM
+    } = process.env;
 
-  const basicAuth = Buffer.from(`${apiKey}:${password}`).toString('base64');
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Basic ${basicAuth}`
-  };
-
-  const missingTagProductIds = [];
-  let pageInfo = null;
-  let hasNextPage = true;
-
-  while (hasNextPage) {
-    const queryParams = pageInfo ? `?page_info=${pageInfo}&limit=250` : `?limit=250`;
-    const response = await fetch(`https://${storeDomain}/admin/api/2023-10/products.json${queryParams}`, {
-      headers
+    console.log("🔧 ENV loaded:", {
+      SHOPIFY_STORE_DOMAIN,
+      TAGS_TO_CHECK,
+      EMAIL_TO,
+      EMAIL_FROM
     });
 
-    const data = await response.json();
-    if (!data.products) break;
-
-    for (const product of data.products) {
-      const productTags = product.tags.split(',').map(tag => tag.trim().toLowerCase());
-      const hasAnyTag = tagsToCheck.some(requiredTag => productTags.includes(requiredTag.toLowerCase()));
-      if (!hasAnyTag) {
-        missingTagProductIds.push(product.id);
-      }
+    if (!SHOPIFY_STORE_DOMAIN || !SHOPIFY_ADMIN_API_KEY || !SHOPIFY_ADMIN_API_PASSWORD) {
+      throw new Error("Missing Shopify credentials in environment.");
     }
 
-    const linkHeader = response.headers.get('link');
-    if (linkHeader && linkHeader.includes('rel="next"')) {
-      const match = linkHeader.match(/page_info=([^&>]+)/);
-      pageInfo = match ? match[1] : null;
-    } else {
+    const tagsToCheck = TAGS_TO_CHECK.split(',').map(t => t.trim().toLowerCase());
+    const missingTagProductIds = [];
+    let products = [];
+    let pageInfo = null;
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      const url = `https://${SHOPIFY_STORE_DOMAIN}/admin/api/2023-10/products.json?limit=250${pageInfo ? `&page_info=${pageInfo}` : ''}`;
+      const response = await fetch(url, {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ADMIN_API_PASSWORD,
+          "Content-Type": "application/json"
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ Shopify API error:", errorText);
+        throw new Error("Shopify API request failed.");
+      }
+
+      const data = await response.json();
+      products = data.products || [];
+      console.log(`📦 Fetched ${products.length} products`);
+
+      for (const product of products) {
+        const productTags = product.tags.toLowerCase().split(',').map(t => t.trim());
+        const hasRequiredTag = tagsToCheck.some(tag => productTags.includes(tag));
+        if (!hasRequiredTag) {
+          missingTagProductIds.push(product.id);
+        }
+      }
+
+      // Shopify REST pagination (simplified assumption for now)
       hasNextPage = false;
     }
+
+    console.log("🚨 Missing tag product IDs:", missingTagProductIds);
+
+    if (missingTagProductIds.length > 0) {
+      const client = new postmark.ServerClient(POSTMARK_API_KEY);
+      const sendResult = await client.sendEmail({
+        From: EMAIL_FROM,
+        To: EMAIL_TO,
+        Subject: "Missing Tags Report",
+        TextBody: `Products missing required tags:\n\n${missingTagProductIds.join('\n')}`
+      });
+      console.log("📧 Email sent:", sendResult);
+    }
+
+    res.status(200).json({
+      message: "Check complete.",
+      missing: missingTagProductIds
+    });
+
+  } catch (err) {
+    console.error("💥 Error occurred:", err);
+    res.status(500).json({ error: err.message });
   }
-
-  if (missingTagProductIds.length === 0) {
-    return res.status(200).json({ message: 'All products have at least one required tag.' });
-  }
-
-  // Send report with Postmark
-  const emailBody = `Products missing at least one of the following tags: ${tagsToCheck.join(', ')}\n\n` +
-    missingTagProductIds.map(id => `Product ID: ${id}`).join('\n');
-
-  const emailResponse = await fetch('https://api.postmarkapp.com/email', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'X-Postmark-Server-Token': postmarkApiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      From: emailFrom,
-      To: emailTo,
-      Subject: 'Shopify Products Missing Required Tags',
-      TextBody: emailBody
-    })
-  });
-
-  if (!emailResponse.ok) {
-    return res.status(500).json({ error: 'Failed to send email' });
-  }
-
-  return res.status(200).json({ message: 'Email sent successfully', productIds: missingTagProductIds });
-}
+};
