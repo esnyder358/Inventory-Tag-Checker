@@ -1,0 +1,9 @@
+{
+  "name": "inventory-tag-checker",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "node-fetch": "^2.6.7",
+    "postmark": "^3.0.1"
+  }
+}
