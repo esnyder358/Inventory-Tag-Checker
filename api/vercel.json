@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/check-missing-tags.js": {
+      "cron": "0 14 * * 5"
+    }
+  }
+}
