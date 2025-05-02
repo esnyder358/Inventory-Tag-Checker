@@ -1,3 +1,6 @@
+export const config = {
+  schedule: '0 7 * * 5' // Every Friday at 7 AM
+};
 const fetch = require('node-fetch');
 const postmark = require('postmark');
 
