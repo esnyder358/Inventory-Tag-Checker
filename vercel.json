@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/check-missing-tags.js": {
+      "schedule": "0 7 * * 5"
+    }
+  }
+}
